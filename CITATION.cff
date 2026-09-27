@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this workflow, please cite the article below."
+title: "Shrimp pond 16S rRNA microbiome: short-read (Illumina V3-V4) and full-length (Oxford Nanopore) analysis workflow"
+authors:
+  - family-names: Rajonhson
+    given-names: Dora M.
+    orcid: "https://orcid.org/0000-0003-3247-4510"
+version: 1.0.0
+license: MIT
+preferred-citation:
+  type: article
+  title: "Integrating short- and full-length 16S rRNA gene sequencing to elucidate microbiome profiles in Pacific white shrimp (Litopenaeus vannamei) ponds"
+  authors:
+    - family-names: Rajonhson
+      given-names: Dora M.
+    - name: "et al."
+  journal: "Microbiology Spectrum"
+  volume: 12
+  issue: 11
+  start: "e00965-24"
+  year: 2024
+  doi: "10.1128/spectrum.00965-24"

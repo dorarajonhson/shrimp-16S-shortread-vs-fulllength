@@ -1,0 +1,37 @@
+name: shrimp-16s
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # read processing
+  - fastp
+  - nanofilt
+  - emu
+  # R and analysis packages
+  - r-base=4.3
+  - bioconductor-dada2
+  - bioconductor-phyloseq
+  - bioconductor-deseq2
+  - bioconductor-ancombc
+  - bioconductor-aldex2
+  - bioconductor-lefser
+  - r-vegan=2.6_4
+  - r-ggplot2
+  - r-ggpubr
+  - r-ape
+  - r-stringr
+  - r-rcolorbrewer
+  - r-ggdendro
+  - r-ggvenn
+  - r-tidyr
+  - r-dplyr
+  - r-ggally
+  - r-network
+  - r-sna
+  - r-igraph
+  - r-remotes
+  - r-rmarkdown
+  - r-knitr
+# Two packages are installed from GitHub after creating the environment:
+#   Rscript -e 'remotes::install_github("twbattaglia/btools")'
+#   Rscript -e 'remotes::install_github("NicolasH2/ggdendroplot")'

@@ -1,0 +1,11 @@
+# raw and intermediate sequence data are in NCBI (PRJNA1087723), not in this repository
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.rds
+results/
+*.html
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
