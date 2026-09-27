@@ -1,0 +1,1094 @@
+---
+title: "Shrimp pond 16S rRNA microbiome - Long read (Oxford Nanopore full-length)"
+output: html_notebook
+---
+
+
+```{r set-working-directory}
+# Run from the repository root: all paths below are relative to it
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+```{r install-dependencies}
+#BiocManager::install("scuttle")
+#BiocManager::install("scater")
+#BiocManager::install("mia")
+#BiocManager::install("ANCOMBC")
+```
+
+
+```{r loading-library}
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(ggpubr)
+library(ANCOMBC)
+library(ape)
+library(btools)
+library(stringr)
+library(RColorBrewer)
+library(ggdendroplot)
+library(ggdendro)
+library(ggvenn)
+library(grid)
+library(tidyr)
+library(ALDEx2)
+library(GGally)
+library(network)
+library(sna)
+library(lefser)
+library(DESeq2)
+library(igraph)
+library(dplyr)
+source("R/extract.deepest.taxonomy.R")
+source("R/filter.feature.table.R")
+
+```
+
+
+```{r data_preprocessing}
+packageVersion("phyloseq")
+packageVersion("vegan")
+packageVersion("ggplot2")
+packageVersion("ggpubr")
+packageVersion("ANCOMBC")
+packageVersion("ape")
+packageVersion("btools")
+packageVersion("stringr")
+packageVersion("RColorBrewer")
+packageVersion("tidyr")
+packageVersion("ALDEx2")
+packageVersion("GGally")
+packageVersion("network")
+packageVersion("sna")
+```
+
+```{r import-metadata}
+metaTab = read.csv('data/metadata.csv', check.names = F)
+rownames(metaTab) = metaTab$sample_id
+```
+
+
+```{r}
+outdir = 'results/long-read/'
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+```
+
+
+```{r function_for_calculating_relative_abundance, echo=FALSE}
+calc.relative.abundance <- function(taxMat) {
+    taxRel = taxMat
+    for(i in 1:ncol(taxMat)) {
+        taxRel[,i] = 100*taxMat[,i]/sum(taxMat[,i])
+    }
+    taxRel
+}
+```
+
+
+```{r import-abundance-data}
+
+## import taxonomic abundance data
+taxMatP = as.matrix(t(read.csv('data/long-read/level-2.csv', row.names = 1)))
+taxMatG = as.matrix(t(read.csv('data/long-read/level-6.csv', row.names = 1)))
+taxMatS = as.matrix(t(read.csv('data/long-read/level-7.csv', row.names = 1)))
+
+minDepth = min(colSums(taxMatP))
+
+## rarefying normalization
+## rrarefy() subsamples at random: the seed makes reruns identical
+set.seed(2024)
+rTaxMatP = t(rrarefy(t(taxMatP), minDepth))
+rTaxMatG = t(rrarefy(t(taxMatG), minDepth))
+rTaxMatS = t(rrarefy(t(taxMatS), minDepth))
+
+## calculate relative abundance
+relMatP = calc.relative.abundance(rTaxMatP)
+relMatG = calc.relative.abundance(rTaxMatG)
+relMatS = calc.relative.abundance(rTaxMatS)
+```
+
+
+```{r import-taxonomy-data}
+
+## Prepare taxonomy table for phylum
+annMatP = c()
+phyla = rownames(taxMatP)
+for(i in 1:length(phyla)) {
+    result = str_split(phyla[i], '\\.p__')[[1]]
+    annMatP = rbind(annMatP, result)
+}
+rownames(annMatP) = phyla
+colnames(annMatP) = c('Domain', 'Phylum')
+annMatP[,'Domain'] = str_replace(annMatP[,'Domain'], 'd__', '')
+
+## Prepare taxonomy table for genus
+annMatG = c()
+genera = rownames(taxMatG)
+for(i in 1:length(genera)) {
+    result = str_split(genera[i], '\\.\\w{1}__')[[1]]
+    if(length(result) < 6) {
+        result = c(result, rep('', 6-length(result)))
+    }
+    annMatG = rbind(annMatG, result)
+}
+rownames(annMatG) = genera
+colnames(annMatG) = c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus')
+annMatG[,'Domain'] = str_replace(annMatG[,'Domain'], 'd__', '')
+
+## Prepare taxonomy table for species 
+annMatS = c()
+species = rownames(taxMatS)
+for(i in 1:length(species)) {
+    result = str_split(species[i], '\\.\\w{1}__')[[1]]
+    if(length(result) < 7) {
+        result = c(result, rep('', 7-length(result)))
+    }
+    annMatS = rbind(annMatS, result)
+}
+rownames(annMatS) = species
+colnames(annMatS) = c('Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species')
+annMatS[,'Domain'] = str_replace(annMatS[,'Domain'], 'd__', '')
+
+```
+
+
+```{r create_phyloseq_object}
+## NOTE: phyloseq needs a tree object, so a random tree (rtree) is attached below.
+## UniFrac distances computed on it are exploratory only and are not reported;
+## the published beta-diversity results use Bray-Curtis.
+otu = otu_table(taxMatP, taxa_are_rows = T)
+ann = tax_table(annMatP)
+sam = sample_data(metaTab)
+plsP = phyloseq(otu, ann, sam)
+rtr = rtree(ntaxa(plsP), rooted = T, tip.label = taxa_names(plsP))
+plsP = merge_phyloseq(plsP, rtr)
+plsP
+
+otu = otu_table(taxMatG, taxa_are_rows = T)
+ann = tax_table(annMatG)
+sam = sample_data(metaTab)
+plsG = phyloseq(otu, ann, sam)
+rtr = rtree(ntaxa(plsG), rooted = T, tip.label = taxa_names(plsG))
+plsG = merge_phyloseq(plsG, rtr)
+plsG
+
+otu = otu_table(taxMatS, taxa_are_rows = T)
+ann = tax_table(annMatS)
+sam = sample_data(metaTab)
+plsS = phyloseq(otu, ann, sam)
+rtr = rtree(ntaxa(plsS), rooted = T, tip.label = taxa_names(plsS))
+plsS = merge_phyloseq(plsS, rtr)
+plsS
+```
+
+
+
+```{r plot-microbiota-profile-phylum}
+
+selected = order(rowSums(relMatP), decreasing = T)[1:15]
+
+selRelMatP = rbind(relMatP[selected,], Others = 100-colSums(relMatP[selected,]))
+
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'd__Bacteria.p__', '')
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'd__Archaea.p__', '')
+
+# update phylum name
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'Firmicutes', 'Bacillota')
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'Proteobacteria', 'Pseudomonadota')
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'Actinobacteriota', 'Actinomycetota')
+rownames(selRelMatP) = str_replace(rownames(selRelMatP), 'Chloroflexi', 'Chloroflexota')
+
+datP = data.frame(phyla = rownames(selRelMatP), selRelMatP)
+
+datlP = gather(datP, sample, abundance, IA01:WB25)
+
+datlP$pond = metaTab[datlP$sample,'pond']
+datlP$type = metaTab[datlP$sample,'type']
+
+datlP$phyla = factor(datlP$phyla, levels = rownames(selRelMatP))
+
+n = length(unique(datlP$phyla))
+palette = colorRampPalette(brewer.pal(12, "Set3"))(n)
+
+p = ggplot(datlP, aes(x = sample, y = abundance, fill = phyla)) +
+    geom_bar(position = "stack", stat = "identity") + 
+    scale_fill_manual(values = palette) +
+    theme(axis.text.x = element_text(angle = 90, size = 7)) +
+    facet_grid(~type*pond, scales = "free", space = "free") +
+    labs(x = 'Samples', y = 'Relative Abundance (%)', fill = 'Phylum') +
+    theme(legend.key.size = unit(4.5, 'mm'), strip.text = element_text(size = 7.5))
+
+p
+ggsave(paste0(outdir, 'long-read-microbiota-profile-phylum.png'))
+
+```
+
+```{r plot-density-of-phylum-abundance}
+
+datlP$type_pond = paste0(datlP$type, '\n', datlP$pond)
+
+p = ggplot(datlP, aes(x = log(abundance, 10), fill = phyla)) +
+        geom_density() + 
+        scale_fill_manual(values = palette) +
+        labs(x = "log10(relative_abundance)") +
+        facet_grid(phyla~type_pond, scales = "free") +
+        theme(legend.position = "none", panel.background = element_rect(fill = "white")) +
+        theme(strip.text.y = element_text(angle = 0), axis.text = element_text(size = 5.5))
+p
+#ggsave(paste0(outdir, 'Fig-S1-long-read-phylum-abundance-density.png'))
+```
+
+
+```{r plot-microbiota-profile-genus}
+
+selected = order(rowSums(relMatG), decreasing = T)[1:20]
+selRelMatG = relMatG[selected,]
+
+taxa = sapply(rownames(selRelMatG), extract.deepest.taxonomy)
+indices = which(taxa == "NA" | taxa == "")
+selRelMatG = selRelMatG[-indices,]
+
+rownames(selRelMatG) = sapply(rownames(selRelMatG), extract.deepest.taxonomy)
+
+selRelMatG = rbind(selRelMatG, Others = 100-colSums(selRelMatG))
+
+datG = data.frame(genera = rownames(selRelMatG), selRelMatG)
+
+datlG = gather(datG, sample, abundance, IA01:WB25)
+
+datlG$pond = metaTab[datlG$sample,'pond']
+datlG$type = metaTab[datlG$sample,'type']
+
+datlG$genera = factor(datlG$genera, levels = rownames(selRelMatG))
+
+n = length(unique(datlG$genera))
+palette = colorRampPalette(brewer.pal(12, "Paired"))(n)
+
+p = ggplot(datlG, aes(x = sample, y = abundance, fill = genera)) +
+    geom_bar(position = "stack", stat = "identity") + 
+    scale_fill_manual(values = palette) +
+    theme(axis.text.x = element_text(angle = 90, size = 7)) +
+    facet_grid(~type*pond, scales = "free", space = "free") +
+    labs(x = 'Samples', y = 'Relative Abundance (%)', fill = 'Genus') +
+    theme(legend.key.size = unit(4.5, 'mm'), strip.text = element_text(size = 7.5)) +
+    guides(fill = guide_legend(ncol = 1))
+p
+#ggsave(paste0(outdir, 'Fig-4-long-read-microbiota-profile-genus.png'))
+
+```
+```{r plot-density-of-genera-abundance}
+
+datlG$type_pond = paste0(datlG$type, '\n', datlG$pond)
+
+p = ggplot(datlG, aes(x = log(abundance, 10), fill = genera)) +
+        geom_density() + 
+        scale_fill_manual(values = palette) +
+        labs(x = "log10(relative_abundance)") +
+        facet_grid(genera~type_pond, scales = "free") +
+        theme(legend.position = "none", panel.background = element_rect(fill = "white")) +
+        theme(strip.text.y = element_text(angle = 0), axis.text = element_text(size = 5.5))
+p
+#ggsave(paste0(outdir, 'Fig-S1-long-read-genus-abundance-density.png'))
+```
+
+
+```{r statistical_info_of_top20_phyla}
+
+source("R/microbial_abundance_stat.R")
+
+selected = order(rowSums(relMatP), decreasing = T)[1:20]
+mat = relMatP[selected,]
+rownames(mat) = sapply(rownames(mat), extract.deepest.taxonomy)
+
+outtab = c()
+for(i in 1:nrow(mat)) {
+    dat = data.frame(type = metaTab$type, pond = metaTab$pond, abundance = unlist(mat[i, metaTab$sample_id]))
+    res1 = assess.microbe.stat(dat, 'intestine')
+    res2 = assess.microbe.stat(dat, 'sediment')
+    res3 = assess.microbe.stat(dat, 'water')
+    line = c(rownames(mat)[i], res1, res2, res3)
+    outtab = rbind(outtab, line)
+}
+#write.csv(outtab, file = paste0(outdir, 'Table-S1-long-read-top20-phyla-and-statistics.csv'), quote = F, row.names = F)
+
+```
+
+
+```{r statistical_info_of_top20_genera}
+## Genus
+selected = order(rowSums(relMatG), decreasing = T)[1:20]
+mat = relMatG[selected,]
+rownames(mat) = sapply(rownames(mat), extract.deepest.taxonomy)
+
+outtab = c()
+for(i in 1:nrow(mat)) {
+    dat = data.frame(type = metaTab$type, pond = metaTab$pond, abundance = unlist(mat[i, metaTab$sample_id]))
+    res1 = assess.microbe.stat(dat, 'intestine')
+    res2 = assess.microbe.stat(dat, 'sediment')
+    res3 = assess.microbe.stat(dat, 'water')
+    line = c(rownames(mat)[i], res1, res2, res3)
+    outtab = rbind(outtab, line)
+}
+
+#write.csv(outtab, file = paste0(outdir, 'Table-S1-long-read-top20-genus-and-statistics.csv'), quote = F, row.names = F)
+
+```
+
+```{r statistical_info_of_top20_species}
+## Species
+selected = order(rowSums(relMatS), decreasing = T)[1:20]
+mat = relMatS[selected,]
+rownames(mat) = sapply(rownames(mat), extract.deepest.taxonomy)
+
+outtab = c()
+for(i in 1:nrow(mat)) {
+    dat = data.frame(type = metaTab$type, pond = metaTab$pond, abundance = unlist(mat[i, metaTab$sample_id]))
+    res1 = assess.microbe.stat(dat, 'intestine')
+    res2 = assess.microbe.stat(dat, 'sediment')
+    res3 = assess.microbe.stat(dat, 'water')
+    line = c(rownames(mat)[i], res1, res2, res3)
+    outtab = rbind(outtab, line)
+}
+
+#write.csv(outtab, file = paste0(outdir, 'Table-S1-long-read-top20-species-and-statistics.csv'), quote = F, row.names = F)
+
+```
+
+
+```{r calc_alpha_diversity_species}
+## using rarefied absolute abundance
+shannonValue = vegan::diversity(rTaxMatS, index = "shannon", MARGIN = 2)
+simpsonValue = vegan::diversity(rTaxMatS, index = "simpson", MARGIN = 2)
+observedValue = specnumber(t(rTaxMatS))
+pielouValue = shannonValue/log(observedValue)
+#faithValue = estimate_pd(plsG)[,'PD']
+```
+
+
+```{r create_alpha_diversity_table}
+ordered_samples = metaTab$sample_id
+
+alpDat = data.frame(sample_id = ordered_samples, 
+           shannon = shannonValue[ordered_samples], 
+           #simpson = simpsonValue[ordered_samples], 
+           observed_feature = observedValue[ordered_samples], 
+           pielou = pielouValue[ordered_samples], 
+           type = metaTab[ordered_samples, 'type'], 
+           pond = metaTab[ordered_samples, 'pond'], 
+           type_pond = paste0(metaTab[ordered_samples, 'type'], '-', metaTab[ordered_samples, 'pond']))
+
+```
+
+
+```{r statistical_test_for_alpha_diversity}
+
+alpDatl = gather(alpDat, index, value, shannon:pielou)
+pairs_1 = list(c('intestine-A', 'intestine-B'), c('sediment-A', 'sediment-B'), c('water-A', 'water-B'))
+
+wilcox.test(observed_feature ~ pond, data = alpDat %>% filter(type == 'intestine'))$p.value
+wilcox.test(observed_feature ~ pond, data = alpDat %>% filter(type == 'sediment'))$p.value
+wilcox.test(observed_feature ~ pond, data = alpDat %>% filter(type == 'water'))$p.value
+wilcox.test(pielou ~ pond, data = alpDat %>% filter(type == 'intestine'))$p.value
+wilcox.test(pielou ~ pond, data = alpDat %>% filter(type == 'sediment'))$p.value
+wilcox.test(pielou ~ pond, data = alpDat %>% filter(type == 'water'))$p.value
+wilcox.test(shannon ~ pond, data = alpDat %>% filter(type == 'intestine'))$p.value
+wilcox.test(shannon ~ pond, data = alpDat %>% filter(type == 'sediment'))$p.value
+wilcox.test(shannon ~ pond, data = alpDat %>% filter(type == 'water'))$p.value
+
+p1 = ggplot(alpDatl, aes(x = type_pond, y = value, fill = pond)) +
+    geom_boxplot() + geom_jitter(size = 1) +
+    scale_fill_brewer(palette = "Set1") +
+    stat_compare_means(comparisons = pairs_1, method = "wilcox.test", aes(label = paste(after_stat(p.format), after_stat(p.signif)))) +
+    labs(x = "", y = "") +
+    theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1), axis.title = element_text(size = 10)) +
+    theme(legend.position = "none") +
+    theme(panel.background = element_rect(color = 'gray', fill = 'white')) +
+    facet_wrap(~index, scales = "free_y")
+
+alpDatl$type_pond = factor(alpDatl$type_pond, levels = c('intestine-A', 'sediment-A', 'water-A', 'intestine-B', 'sediment-B', 'water-B'))
+
+alpTypStaRes = c()
+
+kruskal.test(observed_feature ~ type, data = alpDat %>% filter(pond == 'A'))$p.value
+kruskal.test(observed_feature ~ type, data = alpDat %>% filter(pond == 'B'))$p.value
+kruskal.test(pielou ~ type, data = alpDat %>% filter(pond == 'A'))$p.value
+kruskal.test(pielou ~ type, data = alpDat %>% filter(pond == 'B'))$p.value
+kruskal.test(shannon ~ type, data = alpDat %>% filter(pond == 'A'))$p.value
+kruskal.test(shannon ~ type, data = alpDat %>% filter(pond == 'B'))$p.value
+
+alpTypStaRes = data.frame(x1 = c(1, 1, 1), 
+                          x2 = c(3, 3, 3), 
+                          y1 = c(625, 0.85, 5.5), 
+                          x3 = c(4, 4, 4),
+                          x4 = c(6, 6, 6), 
+                          y2 = c(650, 0.875, 5.65), 
+                          xlab1 = c(2, 2, 2), 
+                          xlab2 = c(5, 5, 5), 
+                          ylab1 = c(675, 0.9, 5.8), 
+                          lab1 = c('**', '**', '**'), 
+                          lab2 = c('**', '**', '**'), 
+                          index = c('observed_feature', 'pielou', 'shannon'))
+
+
+p2 = ggplot(alpDatl, aes(x = type_pond, y = value)) +
+    geom_boxplot(aes(fill = type)) + geom_jitter(size = 1) +
+    scale_fill_brewer(palette = "Set2") +
+    geom_text(data = alpTypStaRes, aes(x = xlab1, y = ylab1, label = lab1)) +
+    geom_text(data = alpTypStaRes, aes(x = xlab2, y = ylab1, label = lab2)) +
+    geom_segment(data = alpTypStaRes, aes(x = x1, xend = x2, y = y2, yend = y2), color = "black", size = 0.3) +
+    geom_segment(data = alpTypStaRes, aes(x = x3, xend = x4, y = y2, yend = y2), color = "black", size = 0.3) +
+    geom_segment(data = alpTypStaRes, aes(x = x1, xend = x1, y = y1, yend = y2), color = "black", size = 0.3) +
+    geom_segment(data = alpTypStaRes, aes(x = x2, xend = x2, y = y1, yend = y2), color = "black", size = 0.3) +
+    geom_segment(data = alpTypStaRes, aes(x = x3, xend = x3, y = y1, yend = y2), color = "black", size = 0.3) +
+    geom_segment(data = alpTypStaRes, aes(x = x4, xend = x4, y = y1, yend = y2), color = "black", size = 0.3) +
+    labs(x = "", y = "") +
+    theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1), axis.title = element_text(size = 10)) +
+    theme(legend.position = "none") +
+    theme(panel.background = element_rect(color = 'gray', fill = 'white')) +
+    facet_wrap(.~index, scales = "free_y")
+
+p1
+#ggsave(paste0(outdir, 'Fig-2-long-read-alpha-diversity-test-pond.png'))
+
+p2
+#ggsave(paste0(outdir, 'Fig-2-long-read-alpha-diversity-test-origin.png'))
+ 
+
+```
+
+
+
+```{r sr-create_ordinate_matrices}
+ordBray = ordinate(plsS, "PCoA", "bray")
+ordJacc = ordinate(plsS, "PCoA", "jaccard")
+ordUnif = ordinate(plsS, "PCoA", "unifrac")
+ordWuni = ordinate(plsS, "PCoA", "wunifrac")
+
+sample_order = rownames(ordBray$vectors)
+
+eigenBray <- data.frame(ordBray$vectors, 
+                        type = metaTab[sample_order,'type'], 
+                        pond = metaTab[sample_order,'pond'])
+
+eigenJacc <- data.frame(ordJacc$vectors, 
+                        type = metaTab[sample_order,'type'], 
+                        pond = metaTab[sample_order,'pond'])
+
+eigenUnif <- data.frame(ordUnif$vectors, 
+                        type = metaTab[sample_order,'type'], 
+                        pond = metaTab[sample_order,'pond'])
+
+eigenWuni <- data.frame(ordWuni$vectors, 
+                        type = metaTab[sample_order,'type'], 
+                        pond = metaTab[sample_order,'pond'])
+
+PC1.bray = round(100*ordBray$values$Relative_eig[1], 1)
+PC2.bray = round(100*ordBray$values$Relative_eig[2], 1)
+
+PC1.jacc = round(100*ordJacc$values$Relative_eig[1], 1)
+PC2.jacc = round(100*ordJacc$values$Relative_eig[2], 1)
+
+PC1.unif = round(100*ordUnif$values$Relative_eig[1], 1)
+PC2.unif = round(100*ordUnif$values$Relative_eig[2], 1)
+
+PC1.wuni = round(100*ordWuni$values$Relative_eig[1], 1)
+PC2.wuni = round(100*ordWuni$values$Relative_eig[2], 1)
+```
+
+
+```{r PERMANOVA_test_group}
+brayDist <- phyloseq::distance(plsS, method = "bray")
+jaccDist <- phyloseq::distance(plsS, method = "jaccard")
+unifDist <- phyloseq::distance(plsS, method = "unifrac")
+wuniDist <- phyloseq::distance(plsS, method = "wunifrac")
+
+```
+
+
+```{r}
+bray.pcoa <- ordinate(plsS, "PCoA", "bray")
+plot_ordination(plsS, bray.pcoa, shape = "pond", color = "type", title = "Bray-Curtis Distance")
+#ggsave(paste0(outdir, 'Fig-3-long-read-beta-diversity-pcoa-bray-curtis-species.png'))
+
+unif.pcoa <- ordinate(plsS, "PCoA", "unifrac")
+plot_ordination(plsS, unif.pcoa, shape = "pond", color = "type", title = "Unifrac Phylogenetic Distance")
+#ggsave(paste0(outdir, 'Fig-3-long-read-beta-diversity-pcoa-unifrac-species.png'))
+
+bray.nmds <- ordinate(plsS, "NMDS", "bray")
+plot_ordination(plsS, bray.nmds, shape = "pond", color = "type", title = "Bray-Curtis Distance")
+#ggsave(paste0(outdir, 'Fig-3-long-read-beta-diversity-nmds-bray-curtis-species.png'))
+
+unif.nmds <- ordinate(plsS, "NMDS", "unifrac")
+plot_ordination(plsS, unif.nmds, shape = "pond", color = "type", title = "Unifrac Phylogenetic Distance")
+#ggsave(paste0(outdir, 'Fig-3-long-read-beta-diversity-nmds-unifrac-species.png'))
+```
+
+
+
+```{r permanova}
+
+adonis2(brayDist ~ pond*type, data = metaTab, permutations = 9999)
+adonis2(jaccDist ~ pond*type, data = metaTab, permutations = 9999)
+adonis2(unifDist ~ pond*type, data = metaTab, permutations = 9999)
+adonis2(wuniDist ~ pond*type, data = metaTab, permutations = 9999)
+
+```
+
+```{r plot-species-abundance-heatmap}
+# filter top 20 abundance species
+selected = order(rowSums(relMatS), decreasing = T)[1:20]
+
+relMatSTop20 = relMatS[selected,]
+species = sapply(rownames(relMatSTop20), extract.deepest.taxonomy)
+rownames(relMatSTop20) = species
+
+indices = which(species %in% c('NA_NA', '_NA'))
+relMatSTop20 = relMatSTop20[-indices,]
+
+## Construct hierarchical clustering and dendrogram
+dd = as.dendrogram(hclust(dist(relMatSTop20)))
+dd.ord = order.dendrogram(dd)
+
+## Re-order according to hierarchical clustering
+relMatSTop20 = data.frame(relMatSTop20[dd.ord,])
+
+## Export to table
+#write.csv(relMatSTop20, file = paste0(outdir, 'Supplementary-Table-long-read-top20-species-heatmap.csv'))
+
+## Convert wide form to long form
+relMatSTop20l = gather(cbind(species = rownames(relMatSTop20), relMatSTop20), sample_id, abundance, IA01:WB25)
+
+## Add metadata
+relMatSTop20l$pond = metaTab[match(relMatSTop20l$sample_id, metaTab$sample_id), 'pond']
+relMatSTop20l$type = metaTab[match(relMatSTop20l$sample_id, metaTab$sample_id), 'type']
+
+## Factor sample_id by the order of sample_id in metaTab
+relMatSTop20l$sample = factor(relMatSTop20l$sample_id, levels = metaTab$sample_id)
+
+p = ggplot(relMatSTop20l, aes(x = sample_id, y = species, fill = abundance)) +
+    geom_tile() +
+    scale_fill_gradient(low = 'white', high = 'darkgreen') +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1.0, size = 5.5)) +
+    theme(axis.text.y = element_text(size = 10)) +
+    theme(legend.title = element_text(size = 10), legend.position = 'top') +
+    facet_wrap(~type*pond, scales = "free_x", nrow = 1) +
+    labs(fill = "relative\nabundance\n(%)", x = "sample")
+
+p
+#ggsave(paste0(outdir, 'Fig-5-long-read-top20-species-heatmap.png'))
+
+```
+
+
+
+```{r species-abundance-heatmap}
+
+## Select species that have average abundance more than 0.1 percent
+filMatS = relMatS[which(rowMeans(relMatS) > 0.1),]
+species = sapply(rownames(filMatS), extract.deepest.taxonomy)
+#table(species)[order(table(species))]
+uncultured_bac = which(species %in% c('uncultured_Chloroflexi', 'uncultured_delta', 'uncultured_organism', 'uncultured_Bacteroidetes', 'uncultured_gamma', 'metagenome', 'uncultured', 'uncultured_bacterium'))
+filMatS = filMatS[-uncultured_bac,]
+rownames(filMatS) = species[-uncultured_bac]
+
+## Construct hierarchical clustering and dendrogram
+dd = as.dendrogram(hclust(dist(filMatS)))
+dd.ord = order.dendrogram(dd)
+
+## Re-order filMatS according to hierarchical clustering
+filMatS = data.frame(filMatS[dd.ord,])
+
+## Export to table
+#write.csv(filMatS, file = paste0(outdir, 'Supplementary-Table-short-read-species-having-average-abundance-morethan-0.1.csv'))
+
+## Convert wide form to long form
+filMatSl = gather(cbind(species = rownames(filMatS), filMatS), sample_id, abundance, IA01:IB09)
+
+## Add metadata
+filMatSl$pond = metaTab[match(filMatSl$sample_id, metaTab$sample_id), 'pond']
+filMatSl$type = metaTab[match(filMatSl$sample_id, metaTab$sample_id), 'type']
+
+## Factor sample_id by the order of sample_id in metaTab
+filMatSl$sample = factor(filMatSl$sample_id, levels = metaTab$sample_id)
+
+p = ggplot(filMatSl, aes(x = sample_id, y = species, fill = abundance)) +
+    geom_tile() +
+    scale_fill_gradient(low = 'white', high = 'darkblue') +
+    #scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 1) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1.0, size = 5.5)) +
+    theme(axis.text.y = element_text(size = 4.5)) +
+    theme(legend.title = element_text(size = 10), legend.position = 'top') +
+    labs(fill = 'relative\nabundance\n(%)', x = 'sample') +
+    facet_wrap(~type*pond, scales = "free_x", nrow = 1)
+
+p
+#ggsave(paste0(outdir, 'Fig-5-long-read-species-heatmap.png'))
+
+```
+
+```{r sr-venn-diagram-of-features}
+
+## absolute abundance in species level
+cnttab = rTaxMatS[,metaTab$sample_id]
+
+wa = which(metaTab$pond == 'A' & metaTab$type == 'water')
+ia = which(metaTab$pond == 'A' & metaTab$type == 'intestine')
+sa = which(metaTab$pond == 'A' & metaTab$type == 'sediment')
+wb = which(metaTab$pond == 'B' & metaTab$type == 'water')
+ib = which(metaTab$pond == 'B' & metaTab$type == 'intestine')
+sb = which(metaTab$pond == 'B' & metaTab$type == 'sediment')
+
+feat_wa = names(which(rowSums(cnttab[, wa]) > 0))
+feat_ia = names(which(rowSums(cnttab[, ia]) > 0))
+feat_sa = names(which(rowSums(cnttab[, sa]) > 0))
+feat_wb = names(which(rowSums(cnttab[, wb]) > 0))
+feat_ib = names(which(rowSums(cnttab[, ib]) > 0))
+feat_sb = names(which(rowSums(cnttab[, sb]) > 0))
+
+setA = list(water = feat_wa, intestine = feat_ia, sediment = feat_sa)
+setB = list(water = feat_wb, intestine = feat_ib, sediment = feat_sb)
+
+pa = ggvenn(setA, stroke_color = "grey", fill_color = c('#99B898', '#FECEAB', '#FF847C'))
+pb = ggvenn(setB, stroke_color = "grey", fill_color = c('#99B898', '#FECEAB', '#FF847C'))
+
+ggarrange(pa, pb, labels = c('Pond A', 'Pond B'))
+#ggsave(paste0(outdir, 'Fig-1-long-read-venn-diagram-features.png'))
+
+
+```
+
+```{r differential-abundance-analysis-lefser}
+
+## Test pond A against pond B under intestine
+tab = metaTab %>% filter(type == 'intestine')
+abnP = relMatP[,tab$sample_id]
+abnG = relMatG[,tab$sample_id]
+abnS = relMatS[,tab$sample_id]
+    
+## Create an SummarizedExperiment (se) using specified metadata and relative abundance
+### Phylum
+seP = SummarizedExperiment(assays = list(counts = abnP), colData = tab)
+difTaxP = lefser(seP, groupCol = 'pond')
+lefserPlot(difTaxP)
+
+### Genus
+seG = SummarizedExperiment(assays = list(counts = abnG), colData = tab)
+difTaxG = lefser(seG, groupCol = 'pond')
+lefserPlot(difTaxG)
+
+### Species
+seS = SummarizedExperiment(assays = list(counts = abnS), colData = tab)
+difTaxS = lefser(seS, groupCol = 'pond')
+lefserPlot(difTaxS)
+
+## Test pond A against pond B under intestine
+tab = metaTab %>% filter(type == 'sediment')
+abnP = relMatP[,tab$sample_id]
+abnG = relMatG[,tab$sample_id]
+abnS = relMatS[,tab$sample_id]
+    
+## Create an SummarizedExperiment (se) using specified metadata and relative abundance
+### Phylum
+seP = SummarizedExperiment(assays = list(counts = abnP), colData = tab)
+difTaxP = lefser(seP, groupCol = 'pond')
+lefserPlot(difTaxP)
+
+### Genus
+seG = SummarizedExperiment(assays = list(counts = abnG), colData = tab)
+#difTaxG = lefser(seG, groupCol = 'pond')
+#lefserPlot(difTaxG)
+
+### Species
+seS = SummarizedExperiment(assays = list(counts = abnS), colData = tab)
+#difTaxS = lefser(seS, groupCol = 'pond')
+#lefserPlot(difTaxS)
+
+## Test pond A against pond B under intestine
+tab = metaTab %>% filter(type == 'water')
+abnP = relMatP[,tab$sample_id]
+abnG = relMatG[,tab$sample_id]
+abnS = relMatS[,tab$sample_id]
+    
+## Create an SummarizedExperiment (se) using specified metadata and relative abundance
+### Phylum
+seP = SummarizedExperiment(assays = list(counts = abnP), colData = tab)
+difTaxP = lefser(seP, groupCol = 'pond')
+lefserPlot(difTaxP)
+
+### Genus
+seG = SummarizedExperiment(assays = list(counts = abnG), colData = tab)
+#difTaxG = lefser(seG, groupCol = 'pond')
+#lefserPlot(difTaxG)
+
+### Species
+seS = SummarizedExperiment(assays = list(counts = abnS), colData = tab)
+#difTaxS = lefser(seS, groupCol = 'pond')
+#lefserPlot(difTaxS)
+
+```
+
+
+```{r plot-rarefraction-curves}
+countTab = read.csv('data/long-read/level-7.csv', row.names = 1)
+countTab = as.matrix(countTab)
+
+palette = colorRampPalette(brewer.pal(9, "Greens"))(33)
+rarecurve(countTab, step = 100, ylab = 'Species', xlab = 'Sequencing Depth', col = palette)
+
+```
+
+
+```{r DEseq2}
+alpha = 0.01
+
+run.deseq <- function(pls) {
+    dds = phyloseq_to_deseq2(pls, ~pond)
+    dds = DESeq(dds, test = "Wald", fitType = "parametric")
+    res = results(dds, cooksCutoff = FALSE)
+    sigtab = res[which(res$padj < alpha),]
+    sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(pls)[rownames(sigtab),], "matrix"))
+    return(sigtab)
+}
+
+```
+
+
+```{r differential-analysis-using-DESeq2}
+
+plsSI = subset_samples(plsS, type == "intestine")
+plsSS = subset_samples(plsS, type == "sediment")
+plsSW = subset_samples(plsS, type == "water")
+
+sigtabI = run.deseq(plsSI)
+write.csv(sigtabI, file = paste0(outdir, 'Table-S2-long-read-differential-abundance-taxa-intestine-deseq2-species-0.01.csv'), quote = F)
+
+sigtabS = run.deseq(plsSS)
+write.csv(sigtabS, file = paste0(outdir, 'Table-S2-long-read-differential-abundance-taxa-sediment-deseq2-species-0.01.csv'), quote = F)
+
+sigtabW = run.deseq(plsSW)
+write.csv(sigtabW, file = paste0(outdir, 'Table-S2-long-read-differential-abundance-taxa-water-deseq2-species-0.01.csv'), quote = F)
+
+```
+
+
+```{r DAT_intestine}
+
+display_dat_result <- function(sigtab, sample_type) {
+  ## modify taxa names
+  sigtab$Phylum = str_replace(sigtab$Phylum, 'p__', '')
+  sigtab$Species = str_replace(sigtab$Species, 's__', '')
+  sigtab$Species[sigtab$Species == ''] = 'unknown'
+
+  ## sort phylum by maximum abundance of their member
+  x = tapply(sigtab$log2FoldChange, sigtab$Phylum, max)
+  x = sort(x, decreasing = TRUE)
+  sigtab$Phylum = factor(as.character(sigtab$Phylum), levels = names(x))
+
+  ## sort species by maximum abundance of their member
+  x = tapply(sigtab$log2FoldChange, sigtab$Species, max)
+  x = sort(x, decreasing = TRUE)
+  sigtab$Species = factor(as.character(sigtab$Species), levels = names(x))
+
+  n = length(unique(sigtab$Phylum))
+  palette = colorRampPalette(brewer.pal(9, "Set1"))(n)
+
+  p = ggplot(sigtab, aes(x = log2FoldChange, y = Species, color = Phylum)) +
+      geom_point(size = 1.5) +
+      theme(axis.text = element_text(size = 7.5)) +
+      xlim(-15,15) +
+      scale_color_manual(values = palette) + 
+      labs(y = 'Species', x = 'log2FoldChange', color = 'Phylum') +
+      theme(legend.key.size = unit(1, 'mm')) +
+      ggtitle(sample_type)
+  p
+}
+
+## Criteria to select DAT: top50, remove "metagenome" and "blank"
+
+sigtabITop50 = sigtabI[order(abs(sigtabI$log2FoldChange), decreasing = T)[1:50],]
+discarded = which(sigtabITop50$Species %in% c('NA_NA', '_NA', 'NA_'))
+if(length(discarded) > 0) {
+  sigtabITop50 = sigtabITop50[-discarded,]  
+}
+display_dat_result(sigtabITop50, 'intestine')
+#ggsave(paste0(outdir, 'Fig-6-long-read-DAT-intestine-species-deseq2-0.01-top20.png'))
+
+sigtabSTop50 = sigtabS[order(abs(sigtabS$log2FoldChange), decreasing = T)[1:50],]
+discarded = which(sigtabSTop50$Species %in% c('NA_NA', '_NA', 'NA_'))
+if(length(discarded) > 0) {
+  sigtabSTop50 = sigtabSTop50[-discarded,]
+}
+display_dat_result(sigtabSTop50, 'sediment')
+#ggsave(paste0(outdir, 'Fig-6-long-read-DAT-sediment-species-deseq2-0.01-top20.png'))
+
+sigtabWTop50 = sigtabW[order(abs(sigtabW$log2FoldChange), decreasing = T)[1:50],]
+discarded = which(sigtabWTop50$Species %in% c('NA_NA', '_NA', 'NA_'))
+sigtabWTop50 = sigtabWTop50[-discarded,]
+display_dat_result(sigtabWTop50, 'water')
+#ggsave(paste0(outdir, 'Fig-6-long-read-DAT-water-species-deseq2-0.01-top20.png'))
+
+```
+```{r combine_figures_into_a_plot}
+
+sigtabITop20 = sigtabITop50[order(abs(sigtabITop50$log2FoldChange), decreasing = T)[1:20],]
+sigtabSTop20 = sigtabSTop50[order(abs(sigtabSTop50$log2FoldChange), decreasing = T)[1:20],]
+sigtabWTop20 = sigtabWTop50[order(abs(sigtabWTop50$log2FoldChange), decreasing = T)[1:20],]
+
+datRes = c()
+
+sigtabITop20 = cbind(type = "intestine", sigtabITop20)
+sigtabSTop20 = cbind(type = "sediment", sigtabSTop20)
+sigtabWTop20 = cbind(type = "water", sigtabWTop20)
+
+datRes = rbind(datRes, sigtabITop20)
+datRes = rbind(datRes, sigtabSTop20)
+datRes = rbind(datRes, sigtabWTop20)
+
+datRes$Phylum = str_replace(datRes$Phylum, 'p__', '')
+datRes$Species = str_replace(datRes$Species, 's__', '')
+
+# Rename phylum
+datRes$Phylum = str_replace(datRes$Phylum, 'Firmicutes', 'Bacillota')
+datRes$Phylum = str_replace(datRes$Phylum, 'Proteobacteria', 'Pseudomonadota')
+datRes$Phylum = str_replace(datRes$Phylum, 'Actinobacteriota', 'Actinomycetota')
+datRes$Phylum = str_replace(datRes$Phylum, 'Chloroflexi', 'Chloroflexota')
+
+```
+
+
+```{r factor-species}
+datRes$Species = str_replace(datRes$Species, "_$", "")
+
+speciesRankTab = datRes %>% group_by(Species) %>% summarise(total = mean(abs(log2FoldChange)))
+speciesRankTab = speciesRankTab[order(speciesRankTab$total, decreasing = T),]
+
+## Factor species by log2foldchange
+datRes$Species = factor(datRes$Species, levels = speciesRankTab$Species)
+```
+
+
+```{r plot-deseq2-result}
+
+n = length(unique(datRes$Phylum))
+palette = colorRampPalette(brewer.pal(9, "Set1"))(n)
+
+ggplot(datRes, aes(x = log2FoldChange, y = Species, color = Phylum)) + 
+  geom_point(size = 1) + 
+  scale_color_manual(values = palette) + 
+  labs(y = 'Species', x = 'log2FoldChange', color = 'Phylum') +
+  theme(legend.key.size = unit(1, 'mm')) +
+  theme(axis.text = element_text(size = 5.5)) +
+  theme(axis.title = element_text(size = 7.5)) +
+  theme(legend.position = "top", legend.text = element_text(size = 5.5), legend.title = element_text(size = 7.5)) +
+  theme(strip.text = element_text(size = 7.5)) +
+  facet_wrap(~type)
+
+ggsave(paste0(outdir, "Fig-6-long-read-deseq2-top50-no-metagenome-and-blank.png"))
+```
+
+
+
+```{r network}
+ai = metaTab[which(metaTab$pond == 'A' & metaTab$type == 'intestine'), 'sample_id']
+aw = metaTab[which(metaTab$pond == 'A' & metaTab$type == 'water'), 'sample_id']
+as = metaTab[which(metaTab$pond == 'A' & metaTab$type == 'sediment'), 'sample_id']
+bi = metaTab[which(metaTab$pond == 'B' & metaTab$type == 'intestine'), 'sample_id']
+bw = metaTab[which(metaTab$pond == 'B' & metaTab$type == 'water'), 'sample_id']
+bs = metaTab[which(metaTab$pond == 'B' & metaTab$type == 'sediment'), 'sample_id']
+
+```
+
+
+```{r}
+extract.deepest.taxonomy.long <- function(taxon) {
+  taxon = str_replace(taxon, "NA", "")
+  patterns = str_extract_all(taxon, "\\w{1}__\\w+", simplify = TRUE)
+  last = length(patterns)
+  if(last == 6) {
+    patterns[6] = str_replace(patterns[6], "\\w{1}__", "")
+    return(patterns[6]) 
+  } else if(last < 6) {
+    patterns[last] = str_replace(patterns[last], "\\w{1}__", "")
+    return(patterns[last])
+  }
+} 
+
+#taxon_1 = "d__Bacteria.p__Proteobacteria.c__Gammaproteobacteria.o__Enterobacterales.f__Vibrionaceae.g__Vibrio"
+#taxon_2 = "d__Bacteria.p__Dependentiae.c__Babeliae.o__Babeliales.f__Babeliaceae.g__"
+#taxon_3 = "d__Bacteria.p__Dependentiae.c__Babeliae.o__Babeliales.f__Babeliaceae.g__NA"
+
+#extract.deepest.taxonomy.long(taxon_1)
+#extract.deepest.taxonomy.long(taxon_2)
+#extract.deepest.taxonomy.long(taxon_3)
+```
+
+
+```{r network_2}
+
+
+get_microbial_phylum <- function(taxa) {
+  phyla = c()
+  for(taxon in taxa) {
+    result = str_extract(taxon, 'p__(\\w+)')
+    result = str_replace(result, 'p__', '')
+    phyla = c(phyla, result)
+  }
+  phyla
+}
+
+arrange_unculture <- function(taxa) {
+  running = 1
+  arranged_taxa = c()
+  for(taxon in taxa) {
+    found = str_detect(taxon, 'uncultured')
+    if(found) {
+      taxon = paste0(taxon, '_', running)
+      running = running + 1
+    }
+    arranged_taxa = c(arranged_taxa, taxon)
+  }
+  arranged_taxa
+}
+
+create_microbiome_network <- function(mat, n = 20, cor_cutoff = 0.5, source, pond) {
+  selected = order(rowSums(mat), decreasing = T)[1:20]
+  m = mat[selected,]
+  taxa = rownames(m)
+  phyla = get_microbial_phylum(taxa)
+  deep_taxa = sapply(rownames(m), extract.deepest.taxonomy.long); names(deep_taxa) = c()
+  modified_taxa = arrange_unculture(deep_taxa)
+  
+  rownames(m) = modified_taxa
+  corTab = create_correlatation_matrix(m, cor_cutoff)
+  taxa_total_abundance = rowSums(m)
+  taxa_mean_abundance = rowMeans(m)
+  
+  micNet = list(cortab = corTab,
+                node_attr = data.frame(shared_name = modified_taxa, 
+                                       total_abundance = taxa_total_abundance, 
+                                       mean_abundance = taxa_mean_abundance, 
+                                       phylum = phyla, 
+                                       full_name = taxa, 
+                                       source = source, 
+                                       pond = pond))
+  
+  micNet
+}
+
+```
+
+```{r filter_chloroplast_and_mitochondria}
+discarded = grep("Chloroplast", rownames(relMatG))
+if(length(discarded) > 0) {
+  relMatG = relMatG[-discarded,]
+}
+
+discarded = grep("Mitochondria", rownames(relMatG))
+if(length(discarded) > 0) {
+  relMatG = relMatG[-discarded,]
+}
+```
+
+
+```{r }
+
+## AI
+net = create_microbiome_network(relMatG[,ai], source = "intestine", pond = "A")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gai = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gai, file = "shrimp_network_231203/long_graph_ai.graphml", format = "graphml")
+
+## AS
+net = create_microbiome_network(relMatG[,as], source = "sediment", pond = "A")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gas = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gas, file = "shrimp_network_231203/long_graph_as.graphml", format = "graphml")
+
+## AW
+net = create_microbiome_network(relMatG[,aw], source = "water", pond = "A")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gaw = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gaw, file = "shrimp_network_231203/long_graph_aw.graphml", format = "graphml")
+
+## BI
+net = create_microbiome_network(relMatG[,bi], source = "intestine", pond = "B")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gbi = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gbi, file = "shrimp_network_231203/long_graph_bi.graphml", format = "graphml")
+
+## BS
+net = create_microbiome_network(relMatG[,bs], source = "sediment", pond = "B")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gbs = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gbs, file = "shrimp_network_231203/long_graph_bs.graphml", format = "graphml")
+
+## BW
+net = create_microbiome_network(relMatG[,bw], source = "water", pond = "B")
+
+corDat = data.frame(from = net$cortab$microbe_1, 
+               to = net$cortab$microbe_2, 
+               correlation = net$cortab$correlation)
+
+nodeAttr = data.frame(name = net$node_attr$shared_name, 
+                  abundance = net$node_attr$mean_abundance,
+                  phylum = net$node_attr$phylum,
+                  source = net$node_attr$source,
+                  pond = net$node_attr$pond)
+
+gbw = graph_from_data_frame(corDat, directed = FALSE, vertices = nodeAttr)
+write_graph(gbw, file = "shrimp_network_231203/long_graph_bw.graphml", format = "graphml")
+
+```
+
